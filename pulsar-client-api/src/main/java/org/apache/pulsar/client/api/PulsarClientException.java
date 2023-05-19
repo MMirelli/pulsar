@@ -943,6 +943,13 @@ public class PulsarClientException extends IOException {
         }
     }
 
+   public static class TooFrequentTokenRefreshException extends PulsarClientException{
+        public TooFrequentTokenRefreshException(String msg) {
+            super(msg);
+        }
+    }
+
+
     // wrap an exception to enriching more info messages.
     public static Throwable wrap(Throwable t, String msg) {
         msg += "\n" + t.getMessage();

@@ -53,6 +53,16 @@ public interface Authentication extends Closeable, Serializable {
     }
 
     /**
+     * Invalidates cached authentication data.
+     *
+     * @throws PulsarClientException
+     *             any other error
+     */
+    default void invalidateAuthData() throws PulsarClientException {
+        throw new UnsupportedAuthenticationException("Method not implemented!");
+    }
+
+    /**
      * Get/Create an authentication data provider which provides the data that this client will be sent to the broker.
      * Some authentication method need to auth between each client channel. So it need the broker, who it will talk to.
      *
