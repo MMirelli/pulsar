@@ -36,6 +36,7 @@ public class BrokerInstallWithEntryMetadataInterceptorsTest extends PulsarCluste
         PulsarClusterSpec spec = PulsarClusterSpec.builder()
                 .numBookies(2)
                 .numBrokers(1)
+                .brokerEnvs(brokerEnvs)
                 .clusterName(clusterName)
                 .build();
 
