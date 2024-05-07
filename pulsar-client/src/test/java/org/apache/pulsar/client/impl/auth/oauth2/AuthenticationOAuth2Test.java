@@ -22,8 +22,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -36,6 +35,7 @@ import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
+import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.DefaultMetadataResolver;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
 import org.testng.annotations.BeforeMethod;
@@ -45,7 +45,8 @@ import org.testng.annotations.Test;
  * Tests {@link AuthenticationOAuth2}.
  */
 public class AuthenticationOAuth2Test {
-    private static final String TEST_ACCESS_TOKEN = "x.y.z";
+    private static final String TEST_ACCESS_TOKEN_0 = "x0.y0.z0";
+    private static final String TEST_ACCESS_TOKEN_1 = "x1.y1.z1";
     private static final int TEST_EXPIRES_IN = 60;
 
     private MockClock clock;
@@ -114,7 +115,7 @@ public class AuthenticationOAuth2Test {
     @Test
     public void testGetAuthData() throws Exception {
         AuthenticationDataProvider data;
-        TokenResult tr = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN).expiresIn(TEST_EXPIRES_IN).build();
+        TokenResult tr = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_0).expiresIn(TEST_EXPIRES_IN).build();
         doReturn(tr).when(this.flow).authenticate();
         data = this.auth.getAuthData();
         verify(this.flow, times(1)).authenticate();
@@ -130,6 +131,65 @@ public class AuthenticationOAuth2Test {
         data = this.auth.getAuthData();
         verify(this.flow, times(2)).authenticate();
         assertEquals(data.getCommandData(), tr.getAccessToken());
+    }
+
+    @Test
+    // Test happy path for invalidating authData
+    public void testSuccessfulInvalidateAuthData() throws Exception {
+        AuthenticationDataProvider data;
+        TokenResult tokenResult0 = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_0).expiresIn(TEST_EXPIRES_IN).build();
+        doReturn(tokenResult0).when(this.flow).authenticate();
+        data = this.auth.getAuthData();
+        // validates the authentication before invalidation is successful
+        verify(this.flow, times(1)).authenticate();
+        assertEquals(data.getCommandData(), tokenResult0.getAccessToken());
+
+        this.auth.invalidateAuthData();
+        // validates the invalidation is successful
+        assertEquals(this.auth.cachedToken, null);
+
+        TokenResult tokenResult1 = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_1).expiresIn(TEST_EXPIRES_IN).build();
+        doReturn(tokenResult1).when(this.flow).authenticate();
+        data = this.auth.getAuthData();
+        // validates getAuthData called authenticate and fetched a different token
+        verify(this.flow, times(2)).authenticate();
+        assertNotEquals(data.getCommandData(), tokenResult0.getAccessToken());
+        assertEquals(data.getCommandData(), tokenResult1.getAccessToken());
+    }
+
+    @Test
+    // Test too frequent authData invalidation
+    public void testTooFrequentInvalidateAuthData() throws Exception {
+        this.auth.invalidateAuthData();
+        TokenResult tokenResult0 = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_0).expiresIn(TEST_EXPIRES_IN).build();
+        doReturn(tokenResult0).when(this.flow).authenticate();
+        this.auth.getAuthData();
+        // validates getAuthData after invalidation calls authenticate
+        verify(this.flow, times(1)).authenticate();
+
+        // validates the second token invalidation fails due to this occurring within 5 minutes than the previous
+        // and checks the token is the same
+        assertThrows(
+                PulsarClientException.TooFrequentTokenRefreshException.class,
+                () -> this.auth.invalidateAuthData()
+        );
+        // return token1 to make sure that authenticate is not called here
+        doReturn(
+                TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_1).expiresIn(TEST_EXPIRES_IN).build()
+        ).when(this.flow).authenticate();
+        AuthenticationDataProvider data = this.auth.getAuthData();
+        verify(this.flow, times(1)).authenticate();
+        assertEquals(data.getCommandData(), tokenResult0.getAccessToken());
+
+        // validates token invalidation passes after 5 minutes, i.e. the authenticate function is called
+        clock.advance(Duration.ofMinutes(5));
+        TokenResult tokenResult1 = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN_1).expiresIn(TEST_EXPIRES_IN).build();
+        doReturn(tokenResult1).when(this.flow).authenticate();
+        this.auth.invalidateAuthData();
+        data = this.auth.getAuthData();
+        verify(this.flow, times(2)).authenticate();
+        assertNotEquals(data.getCommandData(), tokenResult0.getAccessToken());
+        assertEquals(data.getCommandData(), tokenResult1.getAccessToken());
     }
 
     @Test

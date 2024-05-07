@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang.NotImplementedException;
@@ -48,6 +49,8 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     final Clock clock;
     Flow flow;
     transient CachedToken cachedToken;
+    private boolean isTokenRefreshed;
+    private Instant lastAuthWithRefreshTokenMills = null;
 
     public AuthenticationOAuth2() {
         this.clock = Clock.systemDefaultZone();
@@ -98,11 +101,36 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
 
     @Override
     public synchronized AuthenticationDataProvider getAuthData() throws PulsarClientException {
-        if (this.cachedToken == null || this.cachedToken.isExpired()) {
+        if (this.cachedToken == null || this.cachedToken.isExpired()
+                || this.isTokenRefreshed) {
+
+            if (this.isTokenRefreshed) {
+                this.isTokenRefreshed = false;
+                this.lastAuthWithRefreshTokenMills = this.clock.instant();
+            }
+
             TokenResult tr = this.flow.authenticate();
             this.cachedToken = new CachedToken(tr);
         }
         return this.cachedToken.getAuthData();
+    }
+
+    @Override
+    public synchronized void invalidateAuthData() throws PulsarClientException {
+        // Token should not be refreshed too often, otherwise the client would be able to authenticate too often,
+        // increasing the risk of DDoS. This solution is coarse, it could be replaced by some form of exponential
+        // backoff (https://en.wikipedia.org/wiki/Exponential_backoff).
+        if (this.lastAuthWithRefreshTokenMills == null
+                || this.clock.instant().minusMillis(this.lastAuthWithRefreshTokenMills.toEpochMilli()).toEpochMilli()
+                >= TimeUnit.MINUTES.toMillis(5)) {
+            this.cachedToken = null;
+            this.isTokenRefreshed = true;
+        } else {
+            throw new PulsarClientException.TooFrequentTokenRefreshException(
+                    "The token has been refreshed within the minimum allowed time limit since latest authentication "
+                           + "(5 minute)"
+            );
+        }
     }
 
     @Override
